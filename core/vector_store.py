@@ -6,22 +6,22 @@ import chromadb
 from chromadb.utils import embedding_functions
 from core.splitter import Chunk
 
-# Persistent storage — disk pe save hoga
 CHROMA_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "chroma_db")
 
-_client = None
-_ef = None
+# Check if running on cloud
+IS_CLOUD = not os.access(os.path.dirname(CHROMA_PATH), os.W_OK)
 
+_client = None
 
 def get_client():
     global _client
     if _client is None:
-        try:
-            # Local pe persistent, cloud pe in-memory
-            _client = chromadb.PersistentClient(path=CHROMA_PATH)
-        except Exception:
-            # Streamlit Cloud — readonly filesystem
+        if IS_CLOUD:
+            print("[VectorStore] Cloud detected — using in-memory mode")
             _client = chromadb.EphemeralClient()
+        else:
+            print("[VectorStore] Local detected — using persistent mode")
+            _client = chromadb.PersistentClient(path=CHROMA_PATH)
     return _client
 
 def get_embedding_function():
