@@ -6,7 +6,6 @@ from rank_bm25 import BM25Okapi
 from core.splitter import Chunk
 from core.vector_store import VectorStore
 
-
 class HybridRetriever:
     """
     ChromaDB (semantic) + BM25 (keyword) hybrid search
