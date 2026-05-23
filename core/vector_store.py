@@ -12,6 +12,7 @@ CHROMA_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 IS_CLOUD = not os.access(os.path.dirname(CHROMA_PATH), os.W_OK)
 
 _client = None
+_ef = None
 
 def get_client():
     global _client
