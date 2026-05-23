@@ -12,10 +12,16 @@ CHROMA_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 _client = None
 _ef = None
 
+
 def get_client():
     global _client
     if _client is None:
-        _client = chromadb.PersistentClient(path=CHROMA_PATH)
+        try:
+            # Local pe persistent, cloud pe in-memory
+            _client = chromadb.PersistentClient(path=CHROMA_PATH)
+        except Exception:
+            # Streamlit Cloud — readonly filesystem
+            _client = chromadb.EphemeralClient()
     return _client
 
 def get_embedding_function():
