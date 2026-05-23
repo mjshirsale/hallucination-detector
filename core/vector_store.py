@@ -1,15 +1,12 @@
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import tempfile
 import chromadb
 from chromadb.utils import embedding_functions
 from core.splitter import Chunk
 
-CHROMA_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "chroma_db")
-
-# Check if running on cloud
-IS_CLOUD = not os.access(os.path.dirname(CHROMA_PATH), os.W_OK)
+# Absolute foolproof check for Streamlit Cloud
+IS_CLOUD = "/mount/src" in os.path.abspath(__file__)
 
 _client = None
 _ef = None
@@ -18,10 +15,13 @@ def get_client():
     global _client
     if _client is None:
         if IS_CLOUD:
-            print("[VectorStore] Cloud detected — using in-memory mode")
-            _client = chromadb.EphemeralClient()
+            print("[VectorStore] Streamlit Cloud detected — routing DB to writable /tmp directory")
+            # Cloud par hamesha writable folder use karo
+            cloud_db_path = os.path.join(tempfile.gettempdir(), "chroma_cloud_db")
+            _client = chromadb.PersistentClient(path=cloud_db_path)
         else:
-            print("[VectorStore] Local detected — using persistent mode")
+            print("[VectorStore] Local detected — using persistent mode in project folder")
+            CHROMA_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "chroma_db")
             _client = chromadb.PersistentClient(path=CHROMA_PATH)
     return _client
 
