@@ -138,7 +138,7 @@ Implementation details are intentionally not documented here.
 
 **Mohit J Shirsale**
 
-[LinkedIn](https://www.linkedin.com/in/mohit-shirsale-7b900a31b/) &nbsp;·&nbsp; [GitHub](https://github.com/mjshirsale) &nbsp;·&nbsp; [Live Demo](https://hallucidetect.streamlit.app)
+[LinkedIn](https://www.linkedin.com/in/mohit-shirsale-7b900a31b/) &nbsp;·&nbsp; [GitHub](https://github.com/mjshirsale) &nbsp;·&nbsp; [Live Demo](https://hallucination-detector-3pw6466ruxwpgklahaqqfa.streamlit.app/)
 
 ---
 
