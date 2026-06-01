@@ -1,50 +1,102 @@
-def aggregate(nli_result: dict, llm_result: dict = None) -> dict:
+def aggregate(nli_result: dict, llm_result: dict = None,
+              fact_result: dict = None) -> dict:
     """
-    Smart aggregator:
-    - Sirf DeBERTa pe based verdict deta hai (fast)
-    - Agar DeBERTa ne contradiction ya low confidence detect ki
-      tabhi LLM result consider karta hai
-    - Human readable explanation generate karta hai
+    3-signal aggregator:
+    NLI (40%) + LLM Judge (35%) + Fact Checker (25%)
     """
-
     nli_label = nli_result["nli_label"].upper()
     nli_score = nli_result["nli_score"]
     claim = nli_result["claim"]
 
-    # --- Case 1: DeBERTa confident hai — LLM ki zaroorat nahi ---
-    if nli_label == "ENTAILMENT" and nli_score >= 0.85:
+    fact_score = 0.0
+    fact_signals = []
+    if fact_result:
+        fact_score = fact_result["contradiction_score"]
+        fact_signals = fact_result.get("signals", [])
+
+    # --- Case 1: Fact checker strong contradiction ---
+    if fact_score >= 0.5:
+        llm_hal = (llm_result and
+                   llm_result["llm_verdict"] == "HALLUCINATED")
+
+        final_score = min(
+            0.5 * fact_score +
+            0.3 * (1.0 if nli_label == "CONTRADICTION" else 0.0) +
+            0.2 * (1.0 if llm_hal else 0.0),
+            1.0
+        )
+
+        if final_score >= 0.4:
+            explanation = f"Fact check failed: {'; '.join(fact_signals[:2])}"
+            if llm_result and llm_result.get("reasoning"):
+                explanation += f" | {llm_result['reasoning']}"
+
+            return {
+                "claim": claim,
+                "verdict": "Hallucinated",
+                "hallucination_score": round(final_score, 2),
+                "confidence": "HIGH" if final_score >= 0.6 else "MEDIUM",
+                "explanation": explanation,
+                "correction": llm_result.get("correction", "N/A") if llm_result else "N/A",
+                "reasoning": llm_result.get("reasoning", "") if llm_result else "",
+                "evidence": nli_result.get("evidence_chunk", ""),
+                "fact_signals": fact_signals,
+                "llm_used": llm_result is not None
+            }
+
+    # --- Case 2: NLI confident entailment + no fact issues ---
+    if nli_label == "ENTAILMENT" and nli_score >= 0.85 and fact_score < 0.2:
         return {
             "claim": claim,
             "verdict": "Supported",
             "hallucination_score": 0.0,
             "confidence": "HIGH",
-            "explanation": "Source text directly supports this claim.",
+            "explanation": "Source directly supports this claim.",
             "correction": "N/A",
             "reasoning": "",
             "evidence": nli_result.get("evidence_chunk", ""),
+            "fact_signals": [],
             "llm_used": False
         }
 
-    if nli_label == "CONTRADICTION" and nli_score >= 0.85 and llm_result is None:
+    # --- Case 3: NLI confident contradiction ---
+    if nli_label == "CONTRADICTION" and nli_score >= 0.85:
+        final_score = min(
+            0.6 + (0.2 * fact_score) +
+            (0.2 if llm_result and
+             llm_result["llm_verdict"] == "HALLUCINATED" else 0.0),
+            1.0
+        )
+        explanation = "Source contradicts this claim."
+        if fact_signals:
+            explanation += f" | {'; '.join(fact_signals[:2])}"
+        if llm_result and llm_result.get("reasoning"):
+            explanation += f" | {llm_result['reasoning']}"
+
         return {
             "claim": claim,
             "verdict": "Hallucinated",
-            "hallucination_score": 1.0,
+            "hallucination_score": round(final_score, 2),
             "confidence": "HIGH",
-            "explanation": f"Source text directly contradicts this claim.",
-            "correction": "N/A",
-            "reasoning": "",
+            "explanation": explanation,
+            "correction": llm_result.get("correction", "N/A") if llm_result else "N/A",
+            "reasoning": llm_result.get("reasoning", "") if llm_result else "",
             "evidence": nli_result.get("evidence_chunk", ""),
-            "llm_used": False
+            "fact_signals": fact_signals,
+            "llm_used": llm_result is not None
         }
 
-    # --- Case 2: LLM result available hai — dono signals fuse karo ---
+    # --- Case 4: LLM result available ---
     if llm_result:
         nli_hal = 1.0 if nli_label == "CONTRADICTION" else 0.0
         llm_hal = 1.0 if llm_result["llm_verdict"] == "HALLUCINATED" else 0.0
 
-        # NLI 60%, LLM 40%
-        final_score = round(0.6 * nli_hal + 0.4 * llm_hal, 2)
+        final_score = round(
+            0.4 * nli_hal +
+            0.35 * llm_hal +
+            0.25 * fact_score,
+            2
+        )
 
         if final_score >= 0.6:
             verdict = "Hallucinated"
@@ -53,12 +105,12 @@ def aggregate(nli_result: dict, llm_result: dict = None) -> dict:
         else:
             verdict = "Supported"
 
-        # Conflict detect karo
-        conflict = (nli_label == "CONTRADICTION") != (llm_result["llm_verdict"] == "HALLUCINATED")
-        
+        conflict = (nli_label == "CONTRADICTION") != (llm_hal == 1.0)
         explanation = llm_result.get("reasoning", "")
         if conflict:
             explanation = f"[Models disagree] {explanation}"
+        if fact_signals:
+            explanation += f" | Fact issues: {'; '.join(fact_signals[:2])}"
 
         return {
             "claim": claim,
@@ -69,70 +121,41 @@ def aggregate(nli_result: dict, llm_result: dict = None) -> dict:
             "correction": llm_result.get("correction", "N/A"),
             "reasoning": llm_result.get("reasoning", ""),
             "evidence": nli_result.get("evidence_chunk", ""),
+            "fact_signals": fact_signals,
             "llm_used": True
         }
 
-    # --- Case 3: Neutral ya low confidence — uncertain ---
+    # --- Case 5: Uncertain ---
     return {
         "claim": claim,
         "verdict": "Uncertain",
-        "hallucination_score": 0.5,
+        "hallucination_score": round(0.3 + (0.2 * fact_score), 2),
         "confidence": "LOW",
-        "explanation": "Neither strong support nor contradiction found in source.",
+        "explanation": f"Insufficient evidence. {'; '.join(fact_signals[:2]) if fact_signals else ''}",
         "correction": "N/A",
         "reasoning": "",
         "evidence": nli_result.get("evidence_chunk", ""),
+        "fact_signals": fact_signals,
         "llm_used": False
     }
 
 
-def needs_llm(nli_result: dict) -> bool:
-    """
-    Smart filter — decide karta hai ki LLM call karni chahiye ya nahi
-    Groq rate limits se bachata hai
-    """
+def needs_llm(nli_result: dict, fact_result: dict = None) -> bool:
+    """Smart filter — LLM call karni chahiye?"""
     label = nli_result["nli_label"].upper()
     score = nli_result["nli_score"]
+    fact_score = fact_result["contradiction_score"] if fact_result else 0.0
 
-    # DeBERTa confident hai — LLM ki zaroorat nahi
-    if label == "ENTAILMENT" and score >= 0.85:
+    # Fact checker strong signal — LLM se confirm karo
+    if fact_score >= 0.4:
+        return True
+
+    # NLI confident entailment + no fact issues — skip
+    if label == "ENTAILMENT" and score >= 0.85 and fact_score < 0.2:
         return False
 
-    # DeBERTa contradiction pe bohot confident hai — LLM ki zaroorat nahi
-    if label == "CONTRADICTION" and score >= 0.90:
+    # NLI very confident contradiction — skip
+    if label == "CONTRADICTION" and score >= 0.92:
         return False
 
-    # Baaki sab cases mein LLM se verify karo
     return True
-
-
-if __name__ == "__main__":
-    # Test Case 1: DeBERTa confident — LLM nahi lagega
-    nli1 = {
-        "claim": "Eiffel Tower is in Paris.",
-        "nli_label": "entailment",
-        "nli_score": 0.998,
-        "is_hallucinated": False,
-        "evidence_chunk": "The Eiffel Tower is located in Paris, France."
-    }
-
-    # Test Case 2: Contradiction — LLM lagega
-    nli2 = {
-        "claim": "Eiffel Tower is in Berlin.",
-        "nli_label": "contradiction",
-        "nli_score": 0.75,
-        "is_hallucinated": True,
-        "evidence_chunk": "The Eiffel Tower is located in Paris, France."
-    }
-
-    print("Test 1 — High confidence entailment:")
-    r1 = aggregate(nli1)
-    print(f"  Verdict : {r1['verdict']}")
-    print(f"  LLM used: {r1['llm_used']}")
-    print(f"  Explanation: {r1['explanation']}\n")
-
-    print("Test 2 — Needs LLM check:")
-    print(f"  needs_llm: {needs_llm(nli2)}")
-    r2 = aggregate(nli2)
-    print(f"  Verdict : {r2['verdict']}")
-    print(f"  LLM used: {r2['llm_used']}")
